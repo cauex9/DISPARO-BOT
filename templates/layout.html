@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Disparo Bot</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="shell">
+  {% if session.get('user_id') %}
+  <aside class="sidebar">
+    <a class="brand" href="{{ url_for('index') }}"><span class="brand-mark">↗</span><span><b>disparo</b><small>organizador</small></span></a>
+    <p class="nav-title">Workspace</p>
+    <a class="nav-link {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}">⌂ <span>Visão geral</span></a>
+    <a class="nav-link {% if request.endpoint == 'grupos' %}active{% endif %}" href="{{ url_for('grupos') }}">◎ <span>Grupos</span></a>
+    <a class="nav-link {% if request.endpoint == 'anuncios' %}active{% endif %}" href="{{ url_for('anuncios') }}">◇ <span>Anúncios</span></a>
+    <a class="nav-link {% if request.endpoint == 'fila' %}active{% endif %}" href="{{ url_for('fila') }}">≡ <span>Fila e histórico</span></a>
+    <div class="sidebar-bottom"><div class="safe-box"><b>{{ 'DRY RUN' if dry_run else 'MANUAL' }}</b><small>{{ 'Simulação ativa' if dry_run else 'Grupos exigem conclusão manual' }}</small></div></div>
+  </aside>
+  {% endif %}
+  <main class="main">
+    <header class="topbar">
+      <div><span class="connection"><i></i> Flask local · SQLite</span></div>
+      {% if session.get('user_id') %}
+      <div class="top-actions">
+        <a class="button secondary" href="{{ url_for('grupos') }}">+ Adicionar grupo</a>
+        <a class="button primary" href="{{ url_for('anuncios') }}">+ Criar anúncio</a>
+        <form method="post" action="{{ url_for('logout') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="button secondary">Sair</button>
+        </form>
+      </div>
+      {% endif %}
+    </header>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}<div class="toast-area" aria-live="polite">{% for category,message in messages %}<div class="toast toast-{{ category if category in ['success', 'error', 'warning', 'info'] else 'info' }}" role="status" data-toast><span class="toast-icon">{% if category == 'success' %}✓{% elif category == 'error' %}!{% elif category == 'warning' %}⚠{% else %}i{% endif %}</span><div class="toast-content"><strong>{% if category == 'success' %}Sucesso{% elif category == 'error' %}Algo deu errado{% elif category == 'warning' %}Atenção{% else %}Informação{% endif %}</strong><span>{{ message }}</span></div><button class="toast-close" type="button" data-dismiss aria-label="Fechar">×</button></div>{% endfor %}</div>{% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+</div>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+{% extends 'layout.html' %}
+{% block content %}
+<section class="page-title">
+  <div><p class="eyebrow">Acesso ao painel</p><h1>Assinatura</h1><p class="lead">Ative seu acesso mensal ao sistema.</p></div>
+</section>
+<div class="columns subscription-layout">
+  <section class="panel subscription-card">
+    <div class="panel-head"><div><p class="eyebrow">Plano disponível</p><h2>Plano Mensal</h2></div></div>
+    <p class="subscription-price">R$ 15,00 <small>/ mês</small></p>
+    <p class="muted">Acesso ao painel enquanto sua assinatura estiver ativa.</p>
+    <form method="post" action="{{ url_for('criar_assinatura') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="button primary full" type="submit">Assinar agora</button>
+    </form>
+  </section>
+  <section class="panel subscription-status">
+    <div class="panel-head"><div><p class="eyebrow">Estado atual</p><h2>{{ subscription.status if subscription else 'Sem assinatura' }}</h2></div></div>
+    {% if subscription %}
+      <p class="muted">Plano: {{ subscription.plan }} · R$ {{ '%.2f'|format(subscription.amount|float) }}</p>
+      {% if subscription.current_period_end %}<p class="muted">Próxima cobrança: {{ subscription.current_period_end }}</p>{% endif %}
+    {% else %}
+      <p class="muted">Crie uma assinatura para receber os dados de pagamento.</p>
+    {% endif %}
+  </section>
+</div>
+{% if payment and payment.code %}
+<section class="panel payment-result">
+  <div class="panel-head"><div><p class="eyebrow">Pagamento PIX</p><h2>Use o código abaixo para pagar</h2></div></div>
+  {% if payment.image %}<img class="pix-image" src="{{ payment.image }}" alt="QR Code PIX">{% endif %}
+  <label class="pix-label" for="pix-code">PIX copia e cola</label>
+  <textarea id="pix-code" class="pix-code" readonly rows="4">{{ payment.code }}</textarea>
+  {% if payment.expires_at %}<p class="muted">Expira em: {{ payment.expires_at }}</p>{% endif %}
+  <p class="info">O painel só será liberado após confirmação válida da PoseidonPay.</p>
+</section>
+{% endif %}
+{% endblock %}

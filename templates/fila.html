@@ -1,0 +1,85 @@
+{% extends 'layout.html' %}
+{% block content %}
+<div class="page-title">
+  <div>
+    <p class="eyebrow">Orquestração</p>
+    <h1>Fila de publicação</h1>
+    <p class="lead">A fila agenda tentativas. Ela não contorna limites ou sistemas anti-spam.</p>
+  </div>
+  <span class="queue-pill {{ queue_state }}">{{ {'running':'Em execução','paused':'Pausada','stopped':'Parada'}[queue_state] }}</span>
+</div>
+<div class="columns">
+  <section class="panel">
+    <div class="panel-head">
+      <div><p class="eyebrow">Controles</p><h2>Adicionar à fila</h2></div>
+    </div>
+    <form method="post" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="enqueue">
+      <label>Anúncio ativo
+        <select name="ad_id" required>
+          <option value="">Selecione</option>
+          {% for ad in ads %}
+          <option value="{{ ad.id }}">{{ ad.title }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Vezes por grupo
+        <input type="number" name="times" value="3" min="1" max="50" required>
+      </label>
+      <button class="button primary full">+ Enfileirar para grupos ativos</button>
+    </form>
+    <div class="control-row">
+      <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="start"><button class="small-button">▶ Iniciar fila</button></form>
+      <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="pause"><button class="small-button">Ⅱ Pausar</button></form>
+      <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="continue"><button class="small-button">▶ Continuar</button></form>
+      <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="stop"><button class="small-button">■ Parar</button></form>
+    </div>
+    <div class="interval-panel">
+      <div class="interval-panel-head">
+        <span class="eyebrow">Intervalo entre postagens</span>
+        <span class="interval-current-badge" id="interval-badge">{{ interval_seconds | interval_label }}</span>
+      </div>
+      <div class="interval-presets">
+        <button type="button" class="preset-btn {% if interval_seconds == 30 %}active{% endif %}" data-seconds="30">30 seg</button>
+        <button type="button" class="preset-btn {% if interval_seconds == 60 %}active{% endif %}" data-seconds="60">1 min</button>
+        <button type="button" class="preset-btn {% if interval_seconds == 120 %}active{% endif %}" data-seconds="120">2 min</button>
+        <button type="button" class="preset-btn {% if interval_seconds == 300 %}active{% endif %}" data-seconds="300">5 min</button>
+        <button type="button" class="preset-btn {% if interval_seconds == 600 %}active{% endif %}" data-seconds="600">10 min</button>
+        <button type="button" class="preset-btn {% if interval_seconds == 1800 %}active{% endif %}" data-seconds="1800">30 min</button>
+        <button type="button" class="preset-btn {% if interval_seconds == 3600 %}active{% endif %}" data-seconds="3600">1 hora</button>
+        <button type="button" class="preset-btn {% if interval_seconds == 7200 %}active{% endif %}" data-seconds="7200">2 horas</button>
+        <button type="button" class="preset-btn {% if interval_seconds == 21600 %}active{% endif %}" data-seconds="21600">6 horas</button>
+        <button type="button" class="preset-btn {% if interval_seconds == 86400 %}active{% endif %}" data-seconds="86400">24 horas</button>
+      </div>
+      <form method="post" class="interval-custom-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="settings">
+        <div class="interval-custom-row">
+          <label class="interval-custom-label">Personalizado (segundos)
+            <input type="number" name="interval_seconds" id="interval_seconds_input" min="5" value="{{ interval_seconds }}" placeholder="ex: 45">
+          </label>
+          <button class="button primary">Salvar</button>
+        </div>
+      </form>
+    </div>
+  </section>
+  <section class="panel callout">
+    <p class="eyebrow">Status da integração</p>
+    <h2>{{ 'Simulação protegida' if dry_run else 'Publicação manual' }}</h2>
+    <p>{% if dry_run %}Com DRY_RUN=true, nada é enviado ao Facebook. A fila registra o resultado localmente.{% else %}A Meta não oferece publicação automática genérica em grupos. Use Preparar para abrir o destino e concluir manualmente.{% endif %}</p>
+    <a href="https://developers.facebook.com/docs/graph-api/changelog/version19.0/" target="_blank">Documentação oficial da Meta ↗</a>
+  </section>
+</div>
+<section class="panel history">
+  <div class="panel-head">
+    <div><p class="eyebrow">Registro persistente</p><h2>Histórico</h2></div>
+    <span class="muted">{{ publications|length }} item(ns)</span>
+  </div>
+  {% include '_history.html' %}
+</section>
+{% endblock %}

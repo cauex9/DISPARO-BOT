@@ -1,0 +1,30 @@
+{% extends 'layout.html' %}
+{% block content %}
+<div class="columns" style="justify-content: center; align-items: center; min-height: 70vh;">
+  <section class="panel" style="max-width: 440px; width: 100%;">
+    <div class="panel-head">
+      <div><p class="eyebrow">Segurança</p><h2>Criar conta</h2></div>
+    </div>
+    <form method="post" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>Nome
+        <input type="text" name="name" required autofocus value="{{ request.form.get('name', '') }}">
+      </label>
+      <label>E-mail
+        <input type="email" name="email" required value="{{ request.form.get('email', '') }}">
+      </label>
+      <label>Usuário
+        <input type="text" name="username" required value="{{ request.form.get('username', '') }}">
+      </label>
+      <label>Senha
+        <input type="password" name="password" required>
+      </label>
+      <label>Confirmar senha
+        <input type="password" name="password_confirmation" required>
+      </label>
+      <button type="submit" class="button primary full">Criar conta</button>
+    </form>
+    <p class="auth-link">Já tenho uma conta — <a href="{{ url_for('login') }}">Entrar</a></p>
+  </section>
+</div>
+{% endblock %}
