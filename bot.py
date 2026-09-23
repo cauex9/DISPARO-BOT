@@ -6,6 +6,7 @@ import getpass
 import asyncio
 import threading
 import logging
+import traceback
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -25,7 +26,7 @@ from poseidon_pay import PoseidonConfigurationError, PoseidonPaymentError, creat
 from subscriptions import has_active_subscription, create_pending_subscription, latest_subscription, mark_subscription_creation_failed, process_poseidon_webhook, update_subscription_from_creation
 from flask_wtf.csrf import CSRFProtect
 
-from telegram_bot import main as telegram_main
+from telegram_bot import get_configuration, main as telegram_main
 
 UPLOAD_FOLDER = BASE_DIR / "uploads"
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "webp"}
@@ -48,18 +49,36 @@ _telegram_thread: threading.Thread | None = None
 _telegram_start_lock = threading.Lock()
 
 
+def _redact_telegram_secret(value: str) -> str:
+    configured_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    return value.replace(configured_token, "[REDACTED]") if configured_token else value
+
+
 def _run_telegram() -> None:
+    event_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(event_loop)
     try:
-        asyncio.set_event_loop(asyncio.new_event_loop())
         telegram_main()
     except Exception as exc:
-        app.logger.error("Falha no bot do Telegram; tipo=%s", type(exc).__name__)
+        error_message = _redact_telegram_secret(str(exc))
+        error_traceback = _redact_telegram_secret(traceback.format_exc())
+        app.logger.error(
+            "Falha no bot do Telegram; tipo=%s; mensagem=%s\n%s",
+            type(exc).__name__,
+            error_message,
+            error_traceback,
+        )
+    finally:
+        asyncio.set_event_loop(None)
+        event_loop.close()
 
 
 def start_telegram() -> threading.Thread | None:
     global _telegram_thread
-    if not os.getenv("TELEGRAM_BOT_TOKEN", "").strip():
-        app.logger.warning("TELEGRAM_BOT_TOKEN ausente; Telegram nao iniciado.")
+    try:
+        get_configuration()
+    except RuntimeError as exc:
+        app.logger.error("Telegram nao iniciado: %s", str(exc))
         return None
     with _telegram_start_lock:
         if _telegram_thread and _telegram_thread.is_alive():
