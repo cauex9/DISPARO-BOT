@@ -3,6 +3,9 @@ from __future__ import annotations
 import os
 import uuid
 import getpass
+import asyncio
+import threading
+import logging
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -22,6 +25,8 @@ from poseidon_pay import PoseidonConfigurationError, PoseidonPaymentError, creat
 from subscriptions import has_active_subscription, create_pending_subscription, latest_subscription, mark_subscription_creation_failed, process_poseidon_webhook, update_subscription_from_creation
 from flask_wtf.csrf import CSRFProtect
 
+from telegram_bot import main as telegram_main
+
 UPLOAD_FOLDER = BASE_DIR / "uploads"
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "webp"}
 
@@ -38,6 +43,35 @@ csrf = CSRFProtect(app)
 
 init_db()
 queue = QueueManager(MetaAPI())
+
+_telegram_thread: threading.Thread | None = None
+_telegram_start_lock = threading.Lock()
+
+
+def _run_telegram() -> None:
+    try:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+        telegram_main()
+    except Exception as exc:
+        app.logger.error("Falha no bot do Telegram; tipo=%s", type(exc).__name__)
+
+
+def start_telegram() -> threading.Thread | None:
+    global _telegram_thread
+    if not os.getenv("TELEGRAM_BOT_TOKEN", "").strip():
+        app.logger.warning("TELEGRAM_BOT_TOKEN ausente; Telegram nao iniciado.")
+        return None
+    with _telegram_start_lock:
+        if _telegram_thread and _telegram_thread.is_alive():
+            return _telegram_thread
+        _telegram_thread = threading.Thread(
+            target=_run_telegram,
+            name="telegram-polling",
+            daemon=True,
+        )
+        _telegram_thread.start()
+        app.logger.info("Thread do Telegram iniciada; polling em andamento.")
+        return _telegram_thread
 
 def is_safe_url(target):
     if not target or not target.startswith("/") or target.startswith("//"):
@@ -452,6 +486,9 @@ def logout():
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+    logging.getLogger("telegram").setLevel(logging.CRITICAL)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     if len(sys.argv) >= 2 and sys.argv[1] == "create-admin":
         if len(sys.argv) != 3:
             print("Uso: python bot.py create-admin <usuario>")
@@ -473,4 +510,10 @@ if __name__ == "__main__":
                 sys.exit(1)
         sys.exit(0)
     
-    app.run(host=os.getenv("HOST", "127.0.0.1"), port=int(os.getenv("PORT", "5000")), debug=os.getenv("FLASK_ENV") == "development")
+    start_telegram()
+    app.run(
+        host=os.getenv("HOST", "0.0.0.0"),
+        port=int(os.getenv("PORT", "5000")),
+        debug=os.getenv("FLASK_ENV") == "development",
+        use_reloader=False,
+    )
