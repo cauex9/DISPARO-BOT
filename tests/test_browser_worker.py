@@ -18,6 +18,7 @@ os.environ.setdefault("BROWSER_TIMEOUT_SECONDS", "30")
 os.environ.setdefault("WORKER_POLL_INTERVAL_SECONDS", "5")
 os.environ.setdefault("WORKER_ID", "browser-worker-1")
 
+import browser_worker
 from browser_health import _playwright_browsers_path, browser_health_check
 from browser_worker import (
     _automation_enabled,
@@ -115,18 +116,80 @@ class BrowserWorkerTests(unittest.TestCase):
         self.assertIsNone(row["worker_id"])
         self.assertEqual(row["attempt_count"], 0)
 
-    def test_internal_health_check_runs_once_per_process_when_web_mode_is_enabled(self):
+    def test_web_service_skips_run_once_when_automation_disabled(self):
+        browser_worker._INTERNAL_HEALTH_CHECK_RAN = False
+        os.environ["BROWSER_AUTOMATION_ENABLED"] = "false"
+        os.environ["BROWSER_RUN_INSIDE_WEB"] = "true"
+
+        with patch("browser_worker.run_once") as mock_run_once:
+            result = trigger_internal_health_check_once()
+
+        self.assertFalse(result)
+        mock_run_once.assert_not_called()
+
+    def test_web_service_skips_run_once_when_not_running_inside_web(self):
+        browser_worker._INTERNAL_HEALTH_CHECK_RAN = False
+        os.environ["BROWSER_AUTOMATION_ENABLED"] = "true"
+        os.environ["BROWSER_RUN_INSIDE_WEB"] = "false"
+
+        with patch("browser_worker.run_once") as mock_run_once:
+            result = trigger_internal_health_check_once()
+
+        self.assertFalse(result)
+        mock_run_once.assert_not_called()
+
+    def test_health_check_only_runs_once_per_process_when_web_mode_is_enabled(self):
+        browser_worker._INTERNAL_HEALTH_CHECK_RAN = False
         os.environ["BROWSER_AUTOMATION_ENABLED"] = "true"
         os.environ["BROWSER_HEALTH_CHECK_ONLY"] = "true"
         os.environ["BROWSER_RUN_INSIDE_WEB"] = "true"
 
-        with patch("browser_worker.browser_health_check", return_value={"ok": True, "status": "ok", "details": "health ok"}) as mock_health:
+        with patch("browser_worker.run_once", return_value=True) as mock_run_once:
             first = trigger_internal_health_check_once()
             second = trigger_internal_health_check_once()
 
         self.assertTrue(first)
         self.assertFalse(second)
-        self.assertEqual(mock_health.call_count, 1)
+        self.assertEqual(mock_run_once.call_count, 1)
+
+    def test_future_mode_runs_once_per_process_when_web_mode_is_enabled(self):
+        browser_worker._INTERNAL_HEALTH_CHECK_RAN = False
+        os.environ["BROWSER_AUTOMATION_ENABLED"] = "true"
+        os.environ["BROWSER_HEALTH_CHECK_ONLY"] = "false"
+        os.environ["BROWSER_RUN_INSIDE_WEB"] = "true"
+
+        with patch("browser_worker.run_once", return_value=True) as mock_run_once:
+            first = trigger_internal_health_check_once()
+            second = trigger_internal_health_check_once()
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertEqual(mock_run_once.call_count, 1)
+
+    def test_future_mode_runs_only_one_job_reservation_per_process(self):
+        browser_worker._INTERNAL_HEALTH_CHECK_RAN = False
+        os.environ["BROWSER_AUTOMATION_ENABLED"] = "true"
+        os.environ["BROWSER_HEALTH_CHECK_ONLY"] = "false"
+        os.environ["BROWSER_RUN_INSIDE_WEB"] = "true"
+        init_db()
+        with get_connection() as connection:
+            connection.execute("DELETE FROM publications")
+        publication_id = create_publication_record(1, 1, 1, status="queued")
+
+        with patch("browser_worker.run_once", wraps=browser_worker.run_once) as mock_run_once:
+            first = trigger_internal_health_check_once()
+            second = trigger_internal_health_check_once()
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertEqual(mock_run_once.call_count, 1)
+
+        with get_connection() as connection:
+            row = connection.execute("SELECT status, attempt_count, worker_id FROM publications WHERE id = ?", (publication_id,)).fetchone()
+        self.assertIn(row["status"], {"processing", "queued"})
+        self.assertNotEqual(row["status"], "published")
+        self.assertLessEqual(row["attempt_count"], 1)
+        self.assertIn(row["worker_id"], {None, browser_worker._worker_id()})
 
     def test_health_check_only_executes_neutral_page_without_facebook_url(self):
         mock_page = MagicMock()

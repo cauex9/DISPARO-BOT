@@ -144,7 +144,7 @@ def run_once() -> bool:
 
 
 def trigger_internal_health_check_once() -> bool:
-    """Runs the neutral browser health check once per process when explicitly enabled for the web service."""
+    """Starts the worker bootstrap once per process when the web service is explicitly allowed to do so."""
     global _INTERNAL_HEALTH_CHECK_RAN
 
     if not _automation_enabled():
@@ -155,16 +155,12 @@ def trigger_internal_health_check_once() -> bool:
         logger.info("Web service browser check skipped because BROWSER_RUN_INSIDE_WEB is false.")
         return False
 
-    if not _health_check_only():
-        logger.info("Web service browser check skipped because BROWSER_HEALTH_CHECK_ONLY is false.")
-        return False
-
     if _INTERNAL_HEALTH_CHECK_RAN:
         logger.info("Web service browser check already ran once in this process; no repeated Chromium launch.")
         return False
 
     _INTERNAL_HEALTH_CHECK_RAN = True
-    logger.info("Web service activating one-time neutral browser health check inside the current Flask process.")
+    logger.info("Web service activating one-time browser worker bootstrap inside the current Flask process.")
     return run_once()
 
 
