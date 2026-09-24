@@ -19,23 +19,35 @@ os.environ.setdefault("WORKER_POLL_INTERVAL_SECONDS", "5")
 os.environ.setdefault("WORKER_ID", "browser-worker-1")
 
 from browser_health import browser_health_check
-from browser_worker import _automation_enabled, _browser_max_concurrency, _health_check_only, _poll_interval_seconds, run_once
+from browser_worker import (
+    _automation_enabled,
+    _browser_max_concurrency,
+    _health_check_only,
+    _poll_interval_seconds,
+    _run_inside_web,
+    run_once,
+    trigger_internal_health_check_once,
+)
 from database import create_publication_record, get_connection, init_db
 
 
 class BrowserWorkerTests(unittest.TestCase):
     def test_browser_automation_disabled_never_starts_browser(self):
         os.environ["BROWSER_AUTOMATION_ENABLED"] = "false"
+        os.environ["BROWSER_RUN_INSIDE_WEB"] = "false"
         self.assertFalse(_automation_enabled())
+        self.assertFalse(_run_inside_web())
         self.assertFalse(run_once())
 
     def test_default_configuration_is_safe(self):
         os.environ["BROWSER_AUTOMATION_ENABLED"] = "false"
+        os.environ["BROWSER_RUN_INSIDE_WEB"] = "false"
         os.environ["BROWSER_HEADLESS"] = "true"
         os.environ["BROWSER_MAX_CONCURRENCY"] = "1"
         os.environ["BROWSER_TIMEOUT_SECONDS"] = "30"
         os.environ["WORKER_POLL_INTERVAL_SECONDS"] = "5"
         self.assertFalse(_automation_enabled())
+        self.assertFalse(_run_inside_web())
         self.assertEqual(_browser_max_concurrency(), 1)
         self.assertEqual(_poll_interval_seconds(), 5)
 
@@ -62,6 +74,7 @@ class BrowserWorkerTests(unittest.TestCase):
     def test_health_check_only_mode_skips_queue_consumption(self):
         os.environ["BROWSER_AUTOMATION_ENABLED"] = "true"
         os.environ["BROWSER_HEALTH_CHECK_ONLY"] = "true"
+        os.environ["BROWSER_RUN_INSIDE_WEB"] = "false"
         self.assertTrue(_health_check_only())
         init_db()
         publication_id = create_publication_record(1, 1, 1, status="queued")
@@ -70,8 +83,24 @@ class BrowserWorkerTests(unittest.TestCase):
             self.assertTrue(run_once())
 
         with get_connection() as connection:
-            publication = connection.execute("SELECT status FROM publications WHERE id = ?", (publication_id,)).fetchone()
+            publication = connection.execute("SELECT status, attempt_count, worker_id, lease_until FROM publications WHERE id = ?", (publication_id,)).fetchone()
         self.assertEqual(publication["status"], "queued")
+        self.assertEqual(publication["attempt_count"], 0)
+        self.assertIsNone(publication["worker_id"])
+        self.assertIsNone(publication["lease_until"])
+
+    def test_internal_health_check_runs_once_per_process_when_web_mode_is_enabled(self):
+        os.environ["BROWSER_AUTOMATION_ENABLED"] = "true"
+        os.environ["BROWSER_HEALTH_CHECK_ONLY"] = "true"
+        os.environ["BROWSER_RUN_INSIDE_WEB"] = "true"
+
+        with patch("browser_worker.browser_health_check", return_value={"ok": True, "status": "ok", "details": "health ok"}) as mock_health:
+            first = trigger_internal_health_check_once()
+            second = trigger_internal_health_check_once()
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertEqual(mock_health.call_count, 1)
 
     def test_health_check_only_executes_neutral_page_without_facebook_url(self):
         mock_page = MagicMock()

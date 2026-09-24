@@ -9,6 +9,7 @@ from browser_health import browser_health_check
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("browser_worker")
+_INTERNAL_HEALTH_CHECK_RAN = False
 
 
 def _worker_id() -> str:
@@ -21,6 +22,10 @@ def _automation_enabled() -> bool:
 
 def _health_check_only() -> bool:
     return os.getenv("BROWSER_HEALTH_CHECK_ONLY", "true").strip().lower() == "true"
+
+
+def _run_inside_web() -> bool:
+    return os.getenv("BROWSER_RUN_INSIDE_WEB", "false").strip().lower() == "true"
 
 
 def _headless_mode() -> bool:
@@ -46,17 +51,17 @@ def run_once() -> bool:
         logger.info("Worker %s: BROWSER_AUTOMATION_ENABLED=false; browser not started and no browser automation happens.", worker_id)
         return False
 
-    if _health_check_only():
+    if not _health_check_only():
         logger.info(
-            "Worker %s: BROWSER_HEALTH_CHECK_ONLY=true; running browser health check only and skipping any queue processing or database writes.",
+            "Worker %s: BROWSER_HEALTH_CHECK_ONLY=false; browser remains disabled in this deployment because only the neutral health check is allowed.",
             worker_id,
         )
-    else:
-        logger.info(
-            "Worker %s: BROWSER_HEALTH_CHECK_ONLY=false; queue processing remains disabled in this deployment because this worker is only configured for neutral browser health checks.",
-            worker_id,
-        )
+        return False
 
+    logger.info(
+        "Worker %s: BROWSER_HEALTH_CHECK_ONLY=true; running browser health check only and skipping any queue processing or database writes.",
+        worker_id,
+    )
     logger.info(
         "Worker %s: neutral browser health check started (headless=%s timeout=%ss concurrency=%s).",
         worker_id,
@@ -76,6 +81,31 @@ def run_once() -> bool:
 
     logger.info("Worker %s: neutral browser check succeeded without contacting Facebook or any authenticated destination.", worker_id)
     return True
+
+
+def trigger_internal_health_check_once() -> bool:
+    """Runs the neutral browser health check once per process when explicitly enabled for the web service."""
+    global _INTERNAL_HEALTH_CHECK_RAN
+
+    if not _automation_enabled():
+        logger.info("Web service browser check skipped because BROWSER_AUTOMATION_ENABLED is false.")
+        return False
+
+    if not _run_inside_web():
+        logger.info("Web service browser check skipped because BROWSER_RUN_INSIDE_WEB is false.")
+        return False
+
+    if not _health_check_only():
+        logger.info("Web service browser check skipped because BROWSER_HEALTH_CHECK_ONLY is false.")
+        return False
+
+    if _INTERNAL_HEALTH_CHECK_RAN:
+        logger.info("Web service browser check already ran once in this process; no repeated Chromium launch.")
+        return False
+
+    _INTERNAL_HEALTH_CHECK_RAN = True
+    logger.info("Web service activating one-time neutral browser health check inside the current Flask process.")
+    return run_once()
 
 
 def main() -> None:

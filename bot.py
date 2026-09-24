@@ -25,6 +25,7 @@ from queue_manager import QueueManager
 from poseidon_pay import PoseidonConfigurationError, PoseidonPaymentError, create_monthly_subscription
 from subscriptions import has_active_subscription, create_pending_subscription, latest_subscription, mark_subscription_creation_failed, process_poseidon_webhook, update_subscription_from_creation
 from flask_wtf.csrf import CSRFProtect
+from browser_worker import trigger_internal_health_check_once
 
 from telegram_bot import get_configuration, main as telegram_main
 
@@ -533,6 +534,11 @@ if __name__ == "__main__":
         sys.exit(0)
     
     start_telegram()
+    try:
+        if os.getenv("BROWSER_RUN_INSIDE_WEB", "false").strip().lower() == "true":
+            trigger_internal_health_check_once()
+    except Exception as exc:  # pragma: no cover - optional browser health only; Flask must survive
+        app.logger.warning("Health check opcional dentro do Web Service falhou: %s", type(exc).__name__)
     app.run(
         host=os.getenv("HOST", "0.0.0.0"),
         port=int(os.getenv("PORT", "5000")),
