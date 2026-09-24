@@ -5,7 +5,7 @@ import os
 import sys
 import time
 
-from database import reserve_next_publication
+from database import get_connection, reserve_next_publication
 from browser_health import browser_health_check
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -85,6 +85,105 @@ def reserve_single_job_for_worker(worker_id: str | None = None, lease_seconds: i
     return publication
 
 
+def prepare_reserved_job(publication: dict | int | None) -> dict:
+    """Safely validate a reserved publication and the related entities without publishing externally."""
+    errors: list[str] = []
+    raw_publication = publication
+
+    if raw_publication is None:
+        return {"ok": False, "publication_id": None, "status": None, "group": None, "ad": None, "variant": None, "prepared_text": None, "errors": ["publication is missing"]}
+
+    if isinstance(raw_publication, int):
+        publication_id = raw_publication
+        with get_connection() as connection:
+            row = connection.execute("SELECT * FROM publications WHERE id = ?", (publication_id,)).fetchone()
+        publication = dict(row) if row else None
+    elif isinstance(raw_publication, dict):
+        publication = dict(raw_publication)
+    else:
+        return {"ok": False, "publication_id": None, "status": None, "group": None, "ad": None, "variant": None, "prepared_text": None, "errors": ["publication payload is not a supported type"]}
+
+    publication_id = publication.get("id") if publication else None
+    status = publication.get("status") if publication else None
+    prepared_text = publication.get("prepared_text") if publication else None
+
+    if publication is None or publication_id is None:
+        errors.append("publication not found or invalid")
+        return {"ok": False, "publication_id": publication_id, "status": status, "group": None, "ad": None, "variant": None, "prepared_text": prepared_text, "errors": errors}
+
+    group_id = publication.get("group_id")
+    ad_id = publication.get("ad_id")
+    variant_id = publication.get("variant_id")
+
+    group = None
+    ad = None
+    variant = None
+
+    if group_id is None:
+        errors.append("publication missing group_id")
+    else:
+        with get_connection() as connection:
+            group_row = connection.execute("SELECT * FROM groups_table WHERE id = ?", (group_id,)).fetchone()
+        group = dict(group_row) if group_row else None
+        if group is None:
+            errors.append(f"group_id={group_id} not found")
+
+    if ad_id is None:
+        errors.append("publication missing ad_id")
+    else:
+        with get_connection() as connection:
+            ad_row = connection.execute("SELECT * FROM ads WHERE id = ?", (ad_id,)).fetchone()
+        ad = dict(ad_row) if ad_row else None
+        if ad is None:
+            errors.append(f"ad_id={ad_id} not found")
+
+    if variant_id is not None:
+        with get_connection() as connection:
+            variant_row = connection.execute("SELECT * FROM ad_variants WHERE id = ?", (variant_id,)).fetchone()
+        variant = dict(variant_row) if variant_row else None
+        if variant is None:
+            errors.append(f"variant_id={variant_id} not found")
+
+    if not errors:
+        result = {
+            "ok": True,
+            "publication_id": publication_id,
+            "status": status,
+            "group": group,
+            "ad": ad,
+            "variant": variant,
+            "prepared_text": prepared_text,
+            "errors": [],
+        }
+        logger.info(
+            "Worker %s: prepared reserved job id=%s with group_id=%s ad_id=%s variant_id=%s; no external publication or Facebook access was attempted.",
+            _worker_id(),
+            publication_id,
+            group_id,
+            ad_id,
+            variant_id,
+        )
+        return result
+
+    result = {
+        "ok": False,
+        "publication_id": publication_id,
+        "status": status,
+        "group": group,
+        "ad": ad,
+        "variant": variant,
+        "prepared_text": prepared_text,
+        "errors": errors,
+    }
+    logger.warning(
+        "Worker %s: reserved job id=%s failed validation before publication: %s",
+        _worker_id(),
+        publication_id,
+        "; ".join(errors)[:500],
+    )
+    return result
+
+
 def run_once() -> bool:
     worker_id = _worker_id()
     if not _automation_enabled():
@@ -134,6 +233,21 @@ def run_once() -> bool:
     if reserved is None:
         logger.info("Worker %s: no queued job available in this cycle; worker remains safe and does not publish.", worker_id)
         return False
+
+    prepared = prepare_reserved_job(reserved)
+    if prepared.get("ok"):
+        logger.info(
+            "Worker %s: reserved job id=%s prepared successfully for future publication logic; no browser, login or external publication was triggered.",
+            worker_id,
+            prepared.get("publication_id"),
+        )
+    else:
+        logger.warning(
+            "Worker %s: reserved job id=%s failed preparation: %s",
+            worker_id,
+            prepared.get("publication_id"),
+            "; ".join(prepared.get("errors", []))[:500],
+        )
 
     logger.info(
         "Worker %s: reserved a single queued job id=%s in safe future mode without publishing to Meta/Facebook/Instagram.",
