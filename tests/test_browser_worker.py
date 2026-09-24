@@ -80,8 +80,12 @@ class BrowserWorkerTests(unittest.TestCase):
         init_db()
         publication_id = create_publication_record(1, 1, 1, status="queued")
 
-        with patch("browser_worker.browser_health_check", return_value={"ok": True, "status": "ok", "details": "health ok"}):
+        with patch("browser_worker.browser_health_check", return_value={"ok": True, "status": "ok", "details": "health ok"}) as mock_health, \
+             patch("browser_worker.reserve_single_job_for_worker") as mock_reserve:
             self.assertTrue(run_once())
+
+        self.assertEqual(mock_health.call_count, 1)
+        self.assertEqual(mock_reserve.call_count, 0)
 
         with get_connection() as connection:
             publication = connection.execute("SELECT status, attempt_count, worker_id, lease_until FROM publications WHERE id = ?", (publication_id,)).fetchone()
@@ -89,6 +93,27 @@ class BrowserWorkerTests(unittest.TestCase):
         self.assertEqual(publication["attempt_count"], 0)
         self.assertIsNone(publication["worker_id"])
         self.assertIsNone(publication["lease_until"])
+
+    def test_run_once_reserves_one_job_once_per_cycle_when_health_check_is_disabled(self):
+        os.environ["BROWSER_AUTOMATION_ENABLED"] = "true"
+        os.environ["BROWSER_HEALTH_CHECK_ONLY"] = "false"
+        os.environ["BROWSER_RUN_INSIDE_WEB"] = "false"
+        init_db()
+        with get_connection() as connection:
+            connection.execute("DELETE FROM publications")
+        publication_id = create_publication_record(1, 1, 1, status="queued")
+
+        with patch("browser_worker.reserve_single_job_for_worker", return_value={"id": publication_id, "status": "processing"}) as mock_reserve:
+            result = run_once()
+
+        self.assertTrue(result)
+        self.assertEqual(mock_reserve.call_count, 1)
+
+        with get_connection() as connection:
+            row = connection.execute("SELECT status, worker_id, attempt_count FROM publications WHERE id = ?", (publication_id,)).fetchone()
+        self.assertEqual(row["status"], "queued")
+        self.assertIsNone(row["worker_id"])
+        self.assertEqual(row["attempt_count"], 0)
 
     def test_internal_health_check_runs_once_per_process_when_web_mode_is_enabled(self):
         os.environ["BROWSER_AUTOMATION_ENABLED"] = "true"

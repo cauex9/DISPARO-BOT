@@ -91,45 +91,55 @@ def run_once() -> bool:
         logger.info("Worker %s: BROWSER_AUTOMATION_ENABLED=false; browser not started and no browser automation happens.", worker_id)
         return False
 
-    if not _health_check_only():
+    if _health_check_only():
         logger.info(
-            "Worker %s: BROWSER_HEALTH_CHECK_ONLY=false; browser remains disabled in this deployment because only the neutral health check is allowed.",
+            "Worker %s: BROWSER_HEALTH_CHECK_ONLY=true; running browser health check only and skipping any queue processing or database writes.",
             worker_id,
         )
+        logger.info(
+            "Worker %s: neutral browser health check started (headless=%s timeout=%ss concurrency=%s).",
+            worker_id,
+            str(_headless_mode()).lower(),
+            _browser_timeout_seconds(),
+            _browser_max_concurrency(),
+        )
+        try:
+            health = browser_health_check()
+        except Exception as exc:  # pragma: no cover - sanitized infrastructure error path
+            logger.warning(
+                "Worker %s: neutral browser health check raised type=%s message=%s",
+                worker_id,
+                type(exc).__name__,
+                str(exc).strip().replace("\r", " ").replace("\n", " ")[:500],
+            )
+            return False
+
+        if not health.get("ok"):
+            logger.warning(
+                "Worker %s: neutral browser health check reported unsuccessful result: status=%s details=%s",
+                worker_id,
+                health.get("status"),
+                health.get("details"),
+            )
+            return False
+
+        logger.info("Worker %s: neutral browser check succeeded without contacting Facebook or any authenticated destination.", worker_id)
+        return True
+
+    logger.info(
+        "Worker %s: BROWSER_HEALTH_CHECK_ONLY=false; reserving one queued job at most once per cycle without publishing anywhere.",
+        worker_id,
+    )
+    reserved = reserve_single_job_for_worker(worker_id=worker_id)
+    if reserved is None:
+        logger.info("Worker %s: no queued job available in this cycle; worker remains safe and does not publish.", worker_id)
         return False
 
     logger.info(
-        "Worker %s: BROWSER_HEALTH_CHECK_ONLY=true; running browser health check only and skipping any queue processing or database writes.",
+        "Worker %s: reserved a single queued job id=%s in safe future mode without publishing to Meta/Facebook/Instagram.",
         worker_id,
+        reserved.get("id"),
     )
-    logger.info(
-        "Worker %s: neutral browser health check started (headless=%s timeout=%ss concurrency=%s).",
-        worker_id,
-        str(_headless_mode()).lower(),
-        _browser_timeout_seconds(),
-        _browser_max_concurrency(),
-    )
-    try:
-        health = browser_health_check()
-    except Exception as exc:  # pragma: no cover - sanitized infrastructure error path
-        logger.warning(
-            "Worker %s: neutral browser health check raised type=%s message=%s",
-            worker_id,
-            type(exc).__name__,
-            str(exc).strip().replace("\r", " ").replace("\n", " ")[:500],
-        )
-        return False
-
-    if not health.get("ok"):
-        logger.warning(
-            "Worker %s: neutral browser health check reported unsuccessful result: status=%s details=%s",
-            worker_id,
-            health.get("status"),
-            health.get("details"),
-        )
-        return False
-
-    logger.info("Worker %s: neutral browser check succeeded without contacting Facebook or any authenticated destination.", worker_id)
     return True
 
 
