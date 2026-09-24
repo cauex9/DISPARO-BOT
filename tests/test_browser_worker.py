@@ -105,10 +105,16 @@ class BrowserWorkerTests(unittest.TestCase):
     def test_health_check_only_executes_neutral_page_without_facebook_url(self):
         mock_page = MagicMock()
         mock_page.evaluate.return_value = "complete"
+
+        mock_context = MagicMock()
+        mock_context.new_page.return_value = mock_page
+
         mock_browser = MagicMock()
-        mock_browser.new_page.return_value = mock_page
+        mock_browser.new_context.return_value = mock_context
+
         mock_playwright = MagicMock()
         mock_playwright.chromium.launch.return_value = mock_browser
+        mock_playwright.chromium.executable_path = "/tmp/chromium"
 
         manager = MagicMock()
         manager.start.return_value = mock_playwright
@@ -122,6 +128,20 @@ class BrowserWorkerTests(unittest.TestCase):
         self.assertNotIn("facebook", goto_args.lower())
         self.assertNotIn("instagram", goto_args.lower())
         self.assertNotIn("meta", goto_args.lower())
+
+    def test_health_check_error_includes_real_exception_message(self):
+        class BrowserLaunchError(RuntimeError):
+            pass
+
+        mock_playwright = MagicMock()
+        mock_playwright.start.side_effect = BrowserLaunchError("chromium executable missing from runtime")
+
+        with patch("browser_health.sync_playwright", return_value=mock_playwright):
+            result = browser_health_check()
+
+        self.assertFalse(result["ok"])
+        self.assertIn("chromium executable missing from runtime", result["details"].lower())
+        self.assertIn("starting playwright", result["details"].lower())
 
 
 if __name__ == "__main__":

@@ -72,11 +72,21 @@ def run_once() -> bool:
     try:
         health = browser_health_check()
     except Exception as exc:  # pragma: no cover - sanitized infrastructure error path
-        logger.warning("Worker %s: neutral browser health check failed with %s.", worker_id, type(exc).__name__)
+        logger.warning(
+            "Worker %s: neutral browser health check raised type=%s message=%s",
+            worker_id,
+            type(exc).__name__,
+            str(exc).strip().replace("\r", " ").replace("\n", " ")[:500],
+        )
         return False
 
     if not health.get("ok"):
-        logger.warning("Worker %s: neutral browser health check reported unsuccessful result: %s.", worker_id, health.get("details"))
+        logger.warning(
+            "Worker %s: neutral browser health check reported unsuccessful result: status=%s details=%s",
+            worker_id,
+            health.get("status"),
+            health.get("details"),
+        )
         return False
 
     logger.info("Worker %s: neutral browser check succeeded without contacting Facebook or any authenticated destination.", worker_id)
