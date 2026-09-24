@@ -158,8 +158,11 @@ def dashboard_data() -> dict:
     stats = {
         "groups": len(groups),
         "published": sum(item["status"] == "published" for item in publications),
+        "simulated": sum(item["status"] == "simulated" for item in publications),
         "queued": sum(item["status"] == "queued" for item in publications),
+        "processing": sum(item["status"] == "processing" for item in publications),
         "errors": sum(item["status"] == "error" for item in publications),
+        "requires_human_action": sum(item["status"] == "requires_human_action" for item in publications),
     }
     return {"groups": groups, "ads": ads, "publications": publications, "stats": stats}
 

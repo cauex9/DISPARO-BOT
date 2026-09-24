@@ -324,8 +324,8 @@ class BotAppTest(unittest.TestCase):
         self.assertTrue(queue.process_next())
         with get_connection() as connection:
             publication = connection.execute("SELECT status, result FROM publications ORDER BY id DESC LIMIT 1").fetchone()
-        self.assertEqual(publication["status"], "published")
-        self.assertEqual(publication["result"], "Publicação simulada com sucesso")
+        self.assertEqual(publication["status"], "simulated")
+        self.assertEqual(publication["result"], "Simulação concluída; nada foi publicado no Facebook.")
 
     def test_pause_and_continue(self):
         self.login()
