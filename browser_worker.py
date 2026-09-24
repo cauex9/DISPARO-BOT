@@ -5,6 +5,7 @@ import os
 import sys
 import time
 
+from database import reserve_next_publication
 from browser_health import browser_health_check
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -43,6 +44,45 @@ def _browser_timeout_seconds() -> int:
 
 def _poll_interval_seconds() -> int:
     return max(1, int(os.getenv("WORKER_POLL_INTERVAL_SECONDS", os.getenv("BROWSER_WORKER_POLL_SECONDS", "5"))))
+
+
+def reserve_single_job_for_worker(worker_id: str | None = None, lease_seconds: int | None = None) -> dict | None:
+    """Reserve at most one queued job without publishing externally. This is future-mode only."""
+    if not _automation_enabled():
+        logger.info("Worker %s: automation disabled; no job reservation in this mode.", worker_id or _worker_id())
+        return None
+
+    if _health_check_only():
+        logger.info("Worker %s: health-check-only mode active; job reservation disabled.", worker_id or _worker_id())
+        return None
+
+    target_worker_id = worker_id or _worker_id()
+    lease = int(lease_seconds or os.getenv("BROWSER_WORKER_LEASE_SECONDS", "60"))
+    max_attempts = max(1, int(os.getenv("BROWSER_WORKER_MAX_ATTEMPTS", "3")))
+
+    try:
+        publication = reserve_next_publication(worker_id=target_worker_id, lease_seconds=lease, max_attempts=max_attempts)
+    except Exception as exc:  # pragma: no cover - safe failure path, worker remains alive
+        logger.warning(
+            "Worker %s: failed to reserve a queued job: type=%s message=%s",
+            target_worker_id,
+            type(exc).__name__,
+            str(exc).strip().replace("\r", " ").replace("\n", " ")[:500],
+        )
+        return None
+
+    if publication is None:
+        logger.info("Worker %s: no queued job available for reservation; worker remains safe.", target_worker_id)
+        return None
+
+    logger.info(
+        "Worker %s: reserved a single queued job id=%s with status=%s and worker_id=%s; no publication was sent to Facebook.",
+        target_worker_id,
+        publication.get("id"),
+        publication.get("status"),
+        publication.get("worker_id"),
+    )
+    return publication
 
 
 def run_once() -> bool:

@@ -25,6 +25,7 @@ from browser_worker import (
     _health_check_only,
     _poll_interval_seconds,
     _run_inside_web,
+    reserve_single_job_for_worker,
     run_once,
     trigger_internal_health_check_once,
 )
@@ -153,6 +154,49 @@ class BrowserWorkerTests(unittest.TestCase):
                 os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
             else:
                 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = original
+
+    def test_future_mode_reserves_one_queued_job_without_publishing(self):
+        init_db()
+        with get_connection() as connection:
+            connection.execute("DELETE FROM publications")
+        os.environ["BROWSER_AUTOMATION_ENABLED"] = "true"
+        os.environ["BROWSER_HEALTH_CHECK_ONLY"] = "false"
+        publication_id = create_publication_record(1, 1, 1, status="queued")
+
+        reserved = reserve_single_job_for_worker()
+        self.assertIsNotNone(reserved)
+        self.assertEqual(reserved["id"], publication_id)
+        self.assertEqual(reserved["status"], "processing")
+        self.assertNotEqual(reserved["status"], "published")
+
+        with get_connection() as connection:
+            row = connection.execute("SELECT status, worker_id, attempt_count FROM publications WHERE id = ?", (publication_id,)).fetchone()
+        self.assertEqual(row["status"], "processing")
+        self.assertIsNotNone(row["worker_id"])
+        self.assertGreaterEqual(row["attempt_count"], 1)
+
+    def test_two_workers_do_not_reserve_same_job(self):
+        init_db()
+        with get_connection() as connection:
+            connection.execute("DELETE FROM publications")
+        os.environ["BROWSER_AUTOMATION_ENABLED"] = "true"
+        os.environ["BROWSER_HEALTH_CHECK_ONLY"] = "false"
+        publication_id = create_publication_record(1, 1, 1, status="queued")
+
+        first = reserve_single_job_for_worker(worker_id="worker-a")
+        second = reserve_single_job_for_worker(worker_id="worker-b")
+
+        self.assertIsNotNone(first)
+        self.assertIsNone(second)
+        self.assertEqual(first["id"], publication_id)
+
+    def test_worker_without_job_available_remains_safe(self):
+        init_db()
+        with get_connection() as connection:
+            connection.execute("DELETE FROM publications")
+        os.environ["BROWSER_AUTOMATION_ENABLED"] = "true"
+        os.environ["BROWSER_HEALTH_CHECK_ONLY"] = "false"
+        self.assertIsNone(reserve_single_job_for_worker())
 
 
 if __name__ == "__main__":
