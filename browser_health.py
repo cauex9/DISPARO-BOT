@@ -15,13 +15,19 @@ logger = logging.getLogger("browser_health")
 
 
 def _playwright_browsers_path() -> str | None:
-    value = os.getenv("PLAYWRIGHT_BROWSERS_PATH", "").strip()
-    if value:
-        return value
+    configured = os.getenv("PLAYWRIGHT_BROWSERS_PATH", "").strip()
+    if configured:
+        return configured
+
     project_root = os.getenv("RENDER_PROJECT_ROOT") or os.getenv("PROJECT_ROOT") or os.getenv("PWD")
-    if project_root:
-        return os.path.join(project_root, ".cache", "ms-playwright")
-    return None
+    if not project_root:
+        return None
+
+    project_root = project_root.rstrip("/")
+    candidate = os.path.join(project_root, "src", ".cache", "ms-playwright")
+    if os.path.isdir(os.path.join(project_root, "src")):
+        return candidate
+    return os.path.join(project_root, ".cache", "ms-playwright")
 
 
 def _browser_timeout_seconds() -> int:
@@ -59,10 +65,12 @@ def browser_health_check() -> dict:
             "details": "playwright not installed",
         }
 
-    playwright_browsers_path = _playwright_browsers_path()
-    if playwright_browsers_path:
-        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = playwright_browsers_path
-        logger.info("Playwright browsers path configured to %s", playwright_browsers_path)
+    effective_playwright_path = os.getenv("PLAYWRIGHT_BROWSERS_PATH", "").strip()
+    if not effective_playwright_path:
+        effective_playwright_path = _playwright_browsers_path() or ""
+    if effective_playwright_path and not os.getenv("PLAYWRIGHT_BROWSERS_PATH"):
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = effective_playwright_path
+    logger.info("PLAYWRIGHT_BROWSERS_PATH effective=%s", os.getenv("PLAYWRIGHT_BROWSERS_PATH", "<unset>"))
 
     try:
         stage = "starting Playwright"
@@ -81,7 +89,9 @@ def browser_health_check() -> dict:
             raise
 
         if chromium_executable:
-            logger.info("Chromium executable path=%s exists=%s", chromium_executable, os.path.exists(chromium_executable))
+            logger.info("playwright.chromium.executable_path=%s exists=%s", chromium_executable, os.path.exists(chromium_executable))
+        else:
+            logger.warning("playwright.chromium.executable_path returned empty value; PLAYWRIGHT_BROWSERS_PATH effective=%s", os.getenv("PLAYWRIGHT_BROWSERS_PATH", "<unset>"))
 
         stage = "starting Chromium"
         browser = playwright.chromium.launch(
