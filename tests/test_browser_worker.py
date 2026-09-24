@@ -18,7 +18,7 @@ os.environ.setdefault("BROWSER_TIMEOUT_SECONDS", "30")
 os.environ.setdefault("WORKER_POLL_INTERVAL_SECONDS", "5")
 os.environ.setdefault("WORKER_ID", "browser-worker-1")
 
-from browser_health import browser_health_check
+from browser_health import _playwright_browsers_path, browser_health_check
 from browser_worker import (
     _automation_enabled,
     _browser_max_concurrency,
@@ -142,6 +142,17 @@ class BrowserWorkerTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("chromium executable missing from runtime", result["details"].lower())
         self.assertIn("starting playwright", result["details"].lower())
+
+    def test_playwright_browsers_path_uses_project_persistent_directory(self):
+        original = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/opt/render/project/src/.cache/ms-playwright"
+        try:
+            self.assertEqual(_playwright_browsers_path(), "/opt/render/project/src/.cache/ms-playwright")
+        finally:
+            if original is None:
+                os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+            else:
+                os.environ["PLAYWRIGHT_BROWSERS_PATH"] = original
 
 
 if __name__ == "__main__":

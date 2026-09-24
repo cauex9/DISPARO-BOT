@@ -14,6 +14,16 @@ except Exception:  # pragma: no cover - handled as a sanitized infrastructure er
 logger = logging.getLogger("browser_health")
 
 
+def _playwright_browsers_path() -> str | None:
+    value = os.getenv("PLAYWRIGHT_BROWSERS_PATH", "").strip()
+    if value:
+        return value
+    project_root = os.getenv("RENDER_PROJECT_ROOT") or os.getenv("PROJECT_ROOT") or os.getenv("PWD")
+    if project_root:
+        return os.path.join(project_root, ".cache", "ms-playwright")
+    return None
+
+
 def _browser_timeout_seconds() -> int:
     return max(5, int(os.getenv("BROWSER_TIMEOUT_SECONDS", "30")))
 
@@ -48,6 +58,11 @@ def browser_health_check() -> dict:
             "status": "error",
             "details": "playwright not installed",
         }
+
+    playwright_browsers_path = _playwright_browsers_path()
+    if playwright_browsers_path:
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = playwright_browsers_path
+        logger.info("Playwright browsers path configured to %s", playwright_browsers_path)
 
     try:
         stage = "starting Playwright"
