@@ -62,6 +62,60 @@ def _parse_facebook_storage_state(raw: str | None) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _safe_url_for_logging(url: str | None) -> str:
+    if not url:
+        return "<empty>"
+    safe = url.strip()
+    if "?" in safe:
+        safe = safe.split("?", 1)[0]
+    if "#" in safe:
+        safe = safe.split("#", 1)[0]
+    return safe
+
+
+def _session_signal_category(page_url: str, page_text: str) -> str:
+    combined = f"{page_url} {page_text}".lower()
+    challenge_tokens = (
+        "checkpoint",
+        "challenge",
+        "verify it's you",
+        "security check",
+        "confirm your identity",
+        "two-factor",
+        "two factor",
+        "suspicious login",
+    )
+    login_tokens = ("log in", "login", "email or phone", "password", "create new account")
+    positive_url_tokens = (
+        "/home.php",
+        "/feed/",
+        "/messages",
+        "/notifications",
+        "/watch",
+        "/marketplace",
+        "/profile.php",
+        "/groups/",
+    )
+    positive_body_tokens = (
+        "what's on your mind",
+        "stories",
+        "messages",
+        "notifications",
+        "watch",
+        "marketplace",
+        "profile",
+        "feed",
+    )
+
+    if any(token in combined for token in challenge_tokens):
+        return "challenge_page"
+    if any(token in combined for token in login_tokens):
+        return "login_page"
+    if any(token in page_url.lower() for token in positive_url_tokens) or any(token in page_text.lower() for token in positive_body_tokens):
+        return "authenticated_positive_signal"
+    return "ambiguous_or_unrecognized"
+
+
 def check_facebook_session(storage_state: str | None = None) -> dict:
     """Check whether a supplied Playwright storage state yields an authenticated Facebook session without publishing or logging any secrets."""
     configured_state = storage_state if storage_state is not None else os.getenv("FACEBOOK_STORAGE_STATE", "").strip()
@@ -79,6 +133,15 @@ def check_facebook_session(storage_state: str | None = None) -> dict:
             "status": "requires_human_action",
             "details": "facebook session storage state is invalid or malformed",
         }
+
+    cookie_count = len(parsed_state.get("cookies") or [])
+    origins = parsed_state.get("origins") or []
+    origins_count = len(origins) if isinstance(origins, list) else 0
+    logger.info(
+        "Facebook session check: storage_state accepted by parser; cookies=%d origins=%d",
+        cookie_count,
+        origins_count,
+    )
 
     if sync_playwright is None:
         return {
@@ -103,10 +166,17 @@ def check_facebook_session(storage_state: str | None = None) -> dict:
         page.goto("https://www.facebook.com/", wait_until="domcontentloaded")
 
         final_url = (page.url or "").lower()
+        final_url_for_log = _safe_url_for_logging(final_url)
         page_text = ""
         with suppress(Exception):
             page_text = (page.locator("body").inner_text() or "").lower()
         combined = f"{final_url} {page_text}"
+        signal_category = _session_signal_category(final_url, page_text)
+        logger.info(
+            "Facebook session check: final_url=%s redirect_category=%s",
+            final_url_for_log,
+            signal_category,
+        )
 
         challenge_tokens = (
             "checkpoint",
@@ -141,12 +211,22 @@ def check_facebook_session(storage_state: str | None = None) -> dict:
         )
 
         if any(token in combined for token in challenge_tokens):
+            logger.warning(
+                "Facebook session check signal: category=%s final_url=%s",
+                "challenge_page",
+                final_url_for_log,
+            )
             return {
                 "ok": False,
                 "status": "requires_human_action",
                 "details": "facebook session requires human action or a security challenge",
             }
         if any(token in combined for token in login_tokens):
+            logger.warning(
+                "Facebook session check signal: category=%s final_url=%s",
+                "login_page",
+                final_url_for_log,
+            )
             return {
                 "ok": False,
                 "status": "unauthenticated",
@@ -156,12 +236,22 @@ def check_facebook_session(storage_state: str | None = None) -> dict:
         has_positive_url = any(token in final_url for token in positive_url_tokens)
         has_positive_body = any(token in page_text for token in positive_body_tokens)
         if has_positive_url or has_positive_body:
+            logger.info(
+                "Facebook session check signal: category=%s final_url=%s",
+                "authenticated_positive_signal",
+                final_url_for_log,
+            )
             return {
                 "ok": True,
                 "status": "authenticated",
                 "details": "facebook session showed authenticated-only DOM or URL evidence and no publish action was attempted",
             }
 
+        logger.warning(
+            "Facebook session check signal: category=%s final_url=%s",
+            "ambiguous_or_unrecognized",
+            final_url_for_log,
+        )
         return {
             "ok": False,
             "status": "requires_human_action",
