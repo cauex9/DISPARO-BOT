@@ -6,7 +6,7 @@ import sys
 import time
 
 from database import get_connection, reserve_next_publication
-from browser_health import browser_health_check
+from browser_health import browser_health_check, check_facebook_session
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("browser_worker")
@@ -241,6 +241,16 @@ def run_once() -> bool:
             worker_id,
             prepared.get("publication_id"),
         )
+        session_result = check_facebook_session()
+        status = session_result.get("status")
+        if status == "authenticated":
+            logger.info("Worker %s: facebook session is authenticated; no publication attempted.", worker_id)
+        elif status == "unauthenticated":
+            logger.warning("Worker %s: facebook session is unauthenticated; no login was attempted.", worker_id)
+        elif status == "requires_human_action":
+            logger.warning("Worker %s: facebook session requires human action or a security challenge; no automatic recovery was attempted.", worker_id)
+        else:
+            logger.warning("Worker %s: facebook session check reported an error; no publication or login was attempted.", worker_id)
     else:
         logger.warning(
             "Worker %s: reserved job id=%s failed preparation: %s",

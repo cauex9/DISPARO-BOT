@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 import os
 import tempfile
 import unittest
@@ -18,6 +20,7 @@ os.environ.setdefault("BROWSER_TIMEOUT_SECONDS", "30")
 os.environ.setdefault("WORKER_POLL_INTERVAL_SECONDS", "5")
 os.environ.setdefault("WORKER_ID", "browser-worker-1")
 
+import browser_health
 import browser_worker
 from browser_health import _playwright_browsers_path, browser_health_check
 from browser_worker import (
@@ -408,6 +411,200 @@ class BrowserWorkerTests(unittest.TestCase):
         os.environ["BROWSER_AUTOMATION_ENABLED"] = "true"
         os.environ["BROWSER_HEALTH_CHECK_ONLY"] = "false"
         self.assertIsNone(reserve_single_job_for_worker())
+
+    def test_check_facebook_session_requires_storage_state(self):
+        with patch.dict(os.environ, {"FACEBOOK_STORAGE_STATE": ""}, clear=False):
+            result = browser_health.check_facebook_session()
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "requires_human_action")
+        self.assertIn("not configured", result["details"].lower())
+
+    def test_check_facebook_session_accepts_raw_json_storage_state(self):
+        fake_page = MagicMock()
+        fake_page.url = "https://www.facebook.com/home.php"
+        fake_page.locator.return_value.inner_text.return_value = "Home Messages Notifications"
+        fake_context = MagicMock()
+        fake_context.new_page.return_value = fake_page
+        fake_browser = MagicMock()
+        fake_browser.new_context.return_value = fake_context
+        fake_playwright = MagicMock()
+        fake_playwright.chromium.launch.return_value = fake_browser
+
+        payload = {"cookies": [], "origins": [{"origin": "https://www.facebook.com", "localStorage": []}]}
+        with patch("browser_health.sync_playwright") as mock_sync_playwright, \
+             patch("browser_health.logger") as mock_logger:
+            manager = MagicMock()
+            manager.start.return_value = fake_playwright
+            mock_sync_playwright.return_value = manager
+            result = browser_health.check_facebook_session(json.dumps(payload))
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "authenticated")
+        self.assertNotIn("cookies", str(mock_logger.warning.call_args_list).lower())
+        self.assertNotIn("password", str(mock_logger.warning.call_args_list).lower())
+
+    def test_check_facebook_session_accepts_base64_storage_state(self):
+        fake_page = MagicMock()
+        fake_page.url = "https://www.facebook.com/messages"
+        fake_page.locator.return_value.inner_text.return_value = "Messages"
+        fake_context = MagicMock()
+        fake_context.new_page.return_value = fake_page
+        fake_browser = MagicMock()
+        fake_browser.new_context.return_value = fake_context
+        fake_playwright = MagicMock()
+        fake_playwright.chromium.launch.return_value = fake_browser
+
+        payload = {"cookies": [], "origins": [{"origin": "https://www.facebook.com", "localStorage": []}]}
+        encoded = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8")
+        with patch("browser_health.sync_playwright") as mock_sync_playwright:
+            manager = MagicMock()
+            manager.start.return_value = fake_playwright
+            mock_sync_playwright.return_value = manager
+            result = browser_health.check_facebook_session(encoded)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "authenticated")
+
+    def test_check_facebook_session_rejects_malformed_storage_state(self):
+        with patch("browser_health.sync_playwright") as mock_sync_playwright:
+            result = browser_health.check_facebook_session("not-valid-json")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "requires_human_action")
+        mock_sync_playwright.assert_not_called()
+
+    def test_check_facebook_session_detects_login_page_as_unauthenticated(self):
+        fake_page = MagicMock()
+        fake_page.url = "https://www.facebook.com/login"
+        fake_page.locator.return_value.inner_text.return_value = "Log in to Facebook Email or phone Password"
+        fake_context = MagicMock()
+        fake_context.new_page.return_value = fake_page
+        fake_browser = MagicMock()
+        fake_browser.new_context.return_value = fake_context
+        fake_playwright = MagicMock()
+        fake_playwright.chromium.launch.return_value = fake_browser
+
+        payload = {"cookies": [], "origins": [{"origin": "https://www.facebook.com", "localStorage": []}]}
+        with patch("browser_health.sync_playwright") as mock_sync_playwright:
+            manager = MagicMock()
+            manager.start.return_value = fake_playwright
+            mock_sync_playwright.return_value = manager
+            result = browser_health.check_facebook_session(json.dumps(payload))
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "unauthenticated")
+
+    def test_check_facebook_session_detects_checkpoint_as_human_action(self):
+        fake_page = MagicMock()
+        fake_page.url = "https://www.facebook.com/checkpoint"
+        fake_page.locator.return_value.inner_text.return_value = "Security Check Confirm your identity"
+        fake_context = MagicMock()
+        fake_context.new_page.return_value = fake_page
+        fake_browser = MagicMock()
+        fake_browser.new_context.return_value = fake_context
+        fake_playwright = MagicMock()
+        fake_playwright.chromium.launch.return_value = fake_browser
+
+        payload = {"cookies": [], "origins": [{"origin": "https://www.facebook.com", "localStorage": []}]}
+        with patch("browser_health.sync_playwright") as mock_sync_playwright:
+            manager = MagicMock()
+            manager.start.return_value = fake_playwright
+            mock_sync_playwright.return_value = manager
+            result = browser_health.check_facebook_session(json.dumps(payload))
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "requires_human_action")
+
+    def test_check_facebook_session_requires_human_action_for_ambiguous_page(self):
+        fake_page = MagicMock()
+        fake_page.url = "https://www.facebook.com/"
+        fake_page.locator.return_value.inner_text.return_value = "Facebook Welcome"
+        fake_context = MagicMock()
+        fake_context.new_page.return_value = fake_page
+        fake_browser = MagicMock()
+        fake_browser.new_context.return_value = fake_context
+        fake_playwright = MagicMock()
+        fake_playwright.chromium.launch.return_value = fake_browser
+
+        payload = {"cookies": [], "origins": [{"origin": "https://www.facebook.com", "localStorage": []}]}
+        with patch("browser_health.sync_playwright") as mock_sync_playwright:
+            manager = MagicMock()
+            manager.start.return_value = fake_playwright
+            mock_sync_playwright.return_value = manager
+            result = browser_health.check_facebook_session(json.dumps(payload))
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "requires_human_action")
+
+    def test_check_facebook_session_handles_playwright_exception(self):
+        fake_playwright = MagicMock()
+        fake_playwright.chromium.launch.side_effect = RuntimeError("browser crashed")
+
+        payload = {"cookies": [], "origins": [{"origin": "https://www.facebook.com", "localStorage": []}]}
+        with patch("browser_health.sync_playwright") as mock_sync_playwright, \
+             patch("browser_health.logger") as mock_logger:
+            manager = MagicMock()
+            manager.start.return_value = fake_playwright
+            mock_sync_playwright.return_value = manager
+            result = browser_health.check_facebook_session(json.dumps(payload))
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "error")
+        self.assertIn("browser crashed", str(mock_logger.warning.call_args_list).lower())
+
+    def test_check_facebook_session_closes_browser_resources_on_error(self):
+        fake_page = MagicMock()
+        fake_page.goto.side_effect = RuntimeError("navigation failed")
+        fake_page.close.side_effect = RuntimeError("page close failed")
+        fake_context = MagicMock()
+        fake_context.new_page.return_value = fake_page
+        fake_browser = MagicMock()
+        fake_browser.new_context.return_value = fake_context
+        fake_browser.close.side_effect = RuntimeError("browser close failed")
+        fake_playwright = MagicMock()
+        fake_playwright.chromium.launch.return_value = fake_browser
+        fake_playwright.stop.side_effect = RuntimeError("playwright stop failed")
+
+        payload = {"cookies": [], "origins": [{"origin": "https://www.facebook.com", "localStorage": []}]}
+        with patch("browser_health.sync_playwright") as mock_sync_playwright:
+            manager = MagicMock()
+            manager.start.return_value = fake_playwright
+            mock_sync_playwright.return_value = manager
+            result = browser_health.check_facebook_session(json.dumps(payload))
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "error")
+        fake_page.close.assert_called()
+        fake_context.close.assert_called()
+        fake_browser.close.assert_called()
+        fake_playwright.stop.assert_called()
+
+    def test_check_facebook_session_does_not_log_secrets(self):
+        fake_page = MagicMock()
+        fake_page.url = "https://www.facebook.com/home.php"
+        fake_page.locator.return_value.inner_text.return_value = "What's on your mind"
+        fake_context = MagicMock()
+        fake_context.new_page.return_value = fake_page
+        fake_browser = MagicMock()
+        fake_browser.new_context.return_value = fake_context
+        fake_playwright = MagicMock()
+        fake_playwright.chromium.launch.return_value = fake_browser
+
+        payload = {"cookies": [{"name": "secret_cookie", "value": "sensitive"}], "origins": [{"origin": "https://www.facebook.com", "localStorage": [{"name": "token", "value": "abc"}]}]}
+        with patch("browser_health.sync_playwright") as mock_sync_playwright, \
+             patch("browser_health.logger") as mock_logger:
+            manager = MagicMock()
+            manager.start.return_value = fake_playwright
+            mock_sync_playwright.return_value = manager
+            result = browser_health.check_facebook_session(json.dumps(payload))
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "authenticated")
+        log_output = str(mock_logger.warning.call_args_list).lower()
+        self.assertNotIn("secret_cookie", log_output)
+        self.assertNotIn("sensitive", log_output)
+        self.assertNotIn("token", log_output)
+        self.assertNotIn("abc", log_output)
 
 
 if __name__ == "__main__":
