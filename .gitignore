@@ -10,3 +10,6 @@ database/*.db-shm
 database/*.db-wal
 uploads/*
 !uploads/.gitkeep
+
+facebook_storage_state.json
+salvar_sessao_facebook.py
