@@ -25,6 +25,10 @@ def _health_check_only() -> bool:
     return os.getenv("BROWSER_HEALTH_CHECK_ONLY", "true").strip().lower() == "true"
 
 
+def _facebook_session_check_only() -> bool:
+    return os.getenv("FACEBOOK_SESSION_CHECK_ONLY", "false").strip().lower() == "true"
+
+
 def _run_inside_web() -> bool:
     return os.getenv("BROWSER_RUN_INSIDE_WEB", "false").strip().lower() == "true"
 
@@ -189,6 +193,23 @@ def run_once() -> bool:
     if not _automation_enabled():
         logger.info("Worker %s: BROWSER_AUTOMATION_ENABLED=false; browser not started and no browser automation happens.", worker_id)
         return False
+
+    if _facebook_session_check_only():
+        logger.info(
+            "Worker %s: FACEBOOK_SESSION_CHECK_ONLY=true; running a single read-only Facebook session check and exiting this cycle without queue access.",
+            worker_id,
+        )
+        session_result = check_facebook_session()
+        status = session_result.get("status")
+        if status == "authenticated":
+            logger.info("Worker %s: facebook session is authenticated; no publication attempted.", worker_id)
+        elif status == "unauthenticated":
+            logger.warning("Worker %s: facebook session is unauthenticated; no login was attempted.", worker_id)
+        elif status == "requires_human_action":
+            logger.warning("Worker %s: facebook session requires human action or a security challenge; no automatic recovery was attempted.", worker_id)
+        else:
+            logger.warning("Worker %s: facebook session check reported an error; no publication or login was attempted.", worker_id)
+        return True
 
     if _health_check_only():
         logger.info(

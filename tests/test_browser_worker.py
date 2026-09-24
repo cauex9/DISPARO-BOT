@@ -38,6 +38,30 @@ from database import create_publication_record, get_connection, init_db
 
 
 class BrowserWorkerTests(unittest.TestCase):
+    def setUp(self):
+        self._env_snapshot = {
+            key: os.environ.get(key)
+            for key in {
+                "BROWSER_AUTOMATION_ENABLED",
+                "BROWSER_HEALTH_CHECK_ONLY",
+                "FACEBOOK_SESSION_CHECK_ONLY",
+                "BROWSER_RUN_INSIDE_WEB",
+                "BROWSER_HEADLESS",
+                "BROWSER_MAX_CONCURRENCY",
+                "BROWSER_TIMEOUT_SECONDS",
+                "WORKER_POLL_INTERVAL_SECONDS",
+                "WORKER_ID",
+            }
+        }
+        self.addCleanup(self._restore_env_snapshot)
+
+    def _restore_env_snapshot(self):
+        for key, value in self._env_snapshot.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
     def _reset_db(self):
         with get_connection() as connection:
             connection.execute("DELETE FROM publications")
@@ -58,27 +82,33 @@ class BrowserWorkerTests(unittest.TestCase):
             return int(group_id), int(ad_id)
 
     def test_browser_automation_disabled_never_starts_browser(self):
-        os.environ["BROWSER_AUTOMATION_ENABLED"] = "false"
-        os.environ["BROWSER_RUN_INSIDE_WEB"] = "false"
-        self.assertFalse(_automation_enabled())
-        self.assertFalse(_run_inside_web())
-        self.assertFalse(run_once())
+        with patch.dict(os.environ, {"BROWSER_AUTOMATION_ENABLED": "false", "BROWSER_RUN_INSIDE_WEB": "false", "FACEBOOK_SESSION_CHECK_ONLY": "false"}, clear=False):
+            self.assertFalse(_automation_enabled())
+            self.assertFalse(_run_inside_web())
+            self.assertFalse(run_once())
 
     def test_default_configuration_is_safe(self):
-        os.environ["BROWSER_AUTOMATION_ENABLED"] = "false"
-        os.environ["BROWSER_RUN_INSIDE_WEB"] = "false"
-        os.environ["BROWSER_HEADLESS"] = "true"
-        os.environ["BROWSER_MAX_CONCURRENCY"] = "1"
-        os.environ["BROWSER_TIMEOUT_SECONDS"] = "30"
-        os.environ["WORKER_POLL_INTERVAL_SECONDS"] = "5"
-        self.assertFalse(_automation_enabled())
-        self.assertFalse(_run_inside_web())
-        self.assertEqual(_browser_max_concurrency(), 1)
-        self.assertEqual(_poll_interval_seconds(), 5)
+        with patch.dict(
+            os.environ,
+            {
+                "BROWSER_AUTOMATION_ENABLED": "false",
+                "BROWSER_RUN_INSIDE_WEB": "false",
+                "BROWSER_HEADLESS": "true",
+                "BROWSER_MAX_CONCURRENCY": "1",
+                "BROWSER_TIMEOUT_SECONDS": "30",
+                "WORKER_POLL_INTERVAL_SECONDS": "5",
+                "FACEBOOK_SESSION_CHECK_ONLY": "false",
+            },
+            clear=False,
+        ):
+            self.assertFalse(_automation_enabled())
+            self.assertFalse(_run_inside_web())
+            self.assertEqual(_browser_max_concurrency(), 1)
+            self.assertEqual(_poll_interval_seconds(), 5)
 
     def test_timeout_path_is_capped(self):
-        os.environ["BROWSER_TIMEOUT_SECONDS"] = "3"
-        self.assertEqual(5, max(5, int(os.environ["BROWSER_TIMEOUT_SECONDS"])))
+        with patch.dict(os.environ, {"BROWSER_TIMEOUT_SECONDS": "3", "FACEBOOK_SESSION_CHECK_ONLY": "false"}, clear=False):
+            self.assertEqual(5, max(5, int(os.environ["BROWSER_TIMEOUT_SECONDS"])))
 
     def test_browser_health_success_without_facebook(self):
         try:
@@ -94,133 +124,179 @@ class BrowserWorkerTests(unittest.TestCase):
         self.assertNotIn("cookie", result["details"].lower())
 
     def test_no_status_published_is_generated_by_browser_side(self):
-        self.assertFalse(run_once())
+        with patch.dict(os.environ, {"FACEBOOK_SESSION_CHECK_ONLY": "false"}, clear=False):
+            self.assertFalse(run_once())
 
     def test_health_check_only_mode_skips_queue_consumption(self):
-        os.environ["BROWSER_AUTOMATION_ENABLED"] = "true"
-        os.environ["BROWSER_HEALTH_CHECK_ONLY"] = "true"
-        os.environ["BROWSER_RUN_INSIDE_WEB"] = "false"
-        self.assertTrue(_health_check_only())
-        init_db()
-        self._reset_db()
-        group_id, ad_id = self._create_valid_group_and_ad()
-        with get_connection() as connection:
-            variant_id = connection.execute("INSERT INTO ad_variants(ad_id, text, active) VALUES (?, ?, ?)", (ad_id, "Texto variante", 1)).lastrowid
-        publication_id = create_publication_record(group_id, ad_id, int(variant_id), status="queued")
+        with patch.dict(
+            os.environ,
+            {
+                "BROWSER_AUTOMATION_ENABLED": "true",
+                "BROWSER_HEALTH_CHECK_ONLY": "true",
+                "FACEBOOK_SESSION_CHECK_ONLY": "false",
+                "BROWSER_RUN_INSIDE_WEB": "false",
+            },
+            clear=False,
+        ):
+            self.assertTrue(_health_check_only())
+            init_db()
+            self._reset_db()
+            group_id, ad_id = self._create_valid_group_and_ad()
+            with get_connection() as connection:
+                variant_id = connection.execute("INSERT INTO ad_variants(ad_id, text, active) VALUES (?, ?, ?)", (ad_id, "Texto variante", 1)).lastrowid
+            publication_id = create_publication_record(group_id, ad_id, int(variant_id), status="queued")
 
-        with patch("browser_worker.browser_health_check", return_value={"ok": True, "status": "ok", "details": "health ok"}) as mock_health, \
-             patch("browser_worker.reserve_single_job_for_worker") as mock_reserve:
-            self.assertTrue(run_once())
+            with patch("browser_worker.browser_health_check", return_value={"ok": True, "status": "ok", "details": "health ok"}) as mock_health, \
+                 patch("browser_worker.reserve_single_job_for_worker") as mock_reserve:
+                self.assertTrue(run_once())
 
-        self.assertEqual(mock_health.call_count, 1)
-        self.assertEqual(mock_reserve.call_count, 0)
+            self.assertEqual(mock_health.call_count, 1)
+            self.assertEqual(mock_reserve.call_count, 0)
 
-        with get_connection() as connection:
-            publication = connection.execute("SELECT status, attempt_count, worker_id, lease_until FROM publications WHERE id = ?", (publication_id,)).fetchone()
-        self.assertEqual(publication["status"], "queued")
-        self.assertEqual(publication["attempt_count"], 0)
-        self.assertIsNone(publication["worker_id"])
-        self.assertIsNone(publication["lease_until"])
+            with get_connection() as connection:
+                publication = connection.execute("SELECT status, attempt_count, worker_id, lease_until FROM publications WHERE id = ?", (publication_id,)).fetchone()
+            self.assertEqual(publication["status"], "queued")
+            self.assertEqual(publication["attempt_count"], 0)
+            self.assertIsNone(publication["worker_id"])
+            self.assertIsNone(publication["lease_until"])
 
     def test_run_once_reserves_one_job_once_per_cycle_when_health_check_is_disabled(self):
-        os.environ["BROWSER_AUTOMATION_ENABLED"] = "true"
-        os.environ["BROWSER_HEALTH_CHECK_ONLY"] = "false"
-        os.environ["BROWSER_RUN_INSIDE_WEB"] = "false"
-        init_db()
-        self._reset_db()
-        group_id, ad_id = self._create_valid_group_and_ad()
-        with get_connection() as connection:
-            variant_id = connection.execute("INSERT INTO ad_variants(ad_id, text, active) VALUES (?, ?, ?)", (ad_id, "Texto variante", 1)).lastrowid
-        publication_id = create_publication_record(group_id, ad_id, int(variant_id), status="queued")
+        with patch.dict(
+            os.environ,
+            {
+                "BROWSER_AUTOMATION_ENABLED": "true",
+                "BROWSER_HEALTH_CHECK_ONLY": "false",
+                "FACEBOOK_SESSION_CHECK_ONLY": "false",
+                "BROWSER_RUN_INSIDE_WEB": "false",
+            },
+            clear=False,
+        ):
+            init_db()
+            self._reset_db()
+            group_id, ad_id = self._create_valid_group_and_ad()
+            with get_connection() as connection:
+                variant_id = connection.execute("INSERT INTO ad_variants(ad_id, text, active) VALUES (?, ?, ?)", (ad_id, "Texto variante", 1)).lastrowid
+            publication_id = create_publication_record(group_id, ad_id, int(variant_id), status="queued")
 
-        with patch("browser_worker.reserve_single_job_for_worker", return_value={"id": publication_id, "status": "processing"}) as mock_reserve:
-            result = run_once()
+            with patch("browser_worker.reserve_single_job_for_worker", return_value={"id": publication_id, "status": "processing"}) as mock_reserve:
+                result = run_once()
 
-        self.assertTrue(result)
-        self.assertEqual(mock_reserve.call_count, 1)
+            self.assertTrue(result)
+            self.assertEqual(mock_reserve.call_count, 1)
 
-        with get_connection() as connection:
-            row = connection.execute("SELECT status, worker_id, attempt_count FROM publications WHERE id = ?", (publication_id,)).fetchone()
-        self.assertEqual(row["status"], "queued")
-        self.assertIsNone(row["worker_id"])
-        self.assertEqual(row["attempt_count"], 0)
+            with get_connection() as connection:
+                row = connection.execute("SELECT status, worker_id, attempt_count FROM publications WHERE id = ?", (publication_id,)).fetchone()
+            self.assertEqual(row["status"], "queued")
+            self.assertIsNone(row["worker_id"])
+            self.assertEqual(row["attempt_count"], 0)
 
     def test_web_service_skips_run_once_when_automation_disabled(self):
         browser_worker._INTERNAL_HEALTH_CHECK_RAN = False
-        os.environ["BROWSER_AUTOMATION_ENABLED"] = "false"
-        os.environ["BROWSER_RUN_INSIDE_WEB"] = "true"
+        with patch.dict(
+            os.environ,
+            {
+                "BROWSER_AUTOMATION_ENABLED": "false",
+                "BROWSER_RUN_INSIDE_WEB": "true",
+                "FACEBOOK_SESSION_CHECK_ONLY": "false",
+            },
+            clear=False,
+        ):
+            with patch("browser_worker.run_once") as mock_run_once:
+                result = trigger_internal_health_check_once()
 
-        with patch("browser_worker.run_once") as mock_run_once:
-            result = trigger_internal_health_check_once()
-
-        self.assertFalse(result)
-        mock_run_once.assert_not_called()
+            self.assertFalse(result)
+            mock_run_once.assert_not_called()
 
     def test_web_service_skips_run_once_when_not_running_inside_web(self):
         browser_worker._INTERNAL_HEALTH_CHECK_RAN = False
-        os.environ["BROWSER_AUTOMATION_ENABLED"] = "true"
-        os.environ["BROWSER_RUN_INSIDE_WEB"] = "false"
+        with patch.dict(
+            os.environ,
+            {
+                "BROWSER_AUTOMATION_ENABLED": "true",
+                "BROWSER_RUN_INSIDE_WEB": "false",
+                "FACEBOOK_SESSION_CHECK_ONLY": "false",
+            },
+            clear=False,
+        ):
+            with patch("browser_worker.run_once") as mock_run_once:
+                result = trigger_internal_health_check_once()
 
-        with patch("browser_worker.run_once") as mock_run_once:
-            result = trigger_internal_health_check_once()
-
-        self.assertFalse(result)
-        mock_run_once.assert_not_called()
+            self.assertFalse(result)
+            mock_run_once.assert_not_called()
 
     def test_health_check_only_runs_once_per_process_when_web_mode_is_enabled(self):
         browser_worker._INTERNAL_HEALTH_CHECK_RAN = False
-        os.environ["BROWSER_AUTOMATION_ENABLED"] = "true"
-        os.environ["BROWSER_HEALTH_CHECK_ONLY"] = "true"
-        os.environ["BROWSER_RUN_INSIDE_WEB"] = "true"
+        with patch.dict(
+            os.environ,
+            {
+                "BROWSER_AUTOMATION_ENABLED": "true",
+                "BROWSER_HEALTH_CHECK_ONLY": "true",
+                "FACEBOOK_SESSION_CHECK_ONLY": "false",
+                "BROWSER_RUN_INSIDE_WEB": "true",
+            },
+            clear=False,
+        ):
+            with patch("browser_worker.run_once", return_value=True) as mock_run_once:
+                first = trigger_internal_health_check_once()
+                second = trigger_internal_health_check_once()
 
-        with patch("browser_worker.run_once", return_value=True) as mock_run_once:
-            first = trigger_internal_health_check_once()
-            second = trigger_internal_health_check_once()
-
-        self.assertTrue(first)
-        self.assertFalse(second)
-        self.assertEqual(mock_run_once.call_count, 1)
+            self.assertTrue(first)
+            self.assertFalse(second)
+            self.assertEqual(mock_run_once.call_count, 1)
 
     def test_future_mode_runs_once_per_process_when_web_mode_is_enabled(self):
         browser_worker._INTERNAL_HEALTH_CHECK_RAN = False
-        os.environ["BROWSER_AUTOMATION_ENABLED"] = "true"
-        os.environ["BROWSER_HEALTH_CHECK_ONLY"] = "false"
-        os.environ["BROWSER_RUN_INSIDE_WEB"] = "true"
+        with patch.dict(
+            os.environ,
+            {
+                "BROWSER_AUTOMATION_ENABLED": "true",
+                "BROWSER_HEALTH_CHECK_ONLY": "false",
+                "FACEBOOK_SESSION_CHECK_ONLY": "false",
+                "BROWSER_RUN_INSIDE_WEB": "true",
+            },
+            clear=False,
+        ):
+            with patch("browser_worker.run_once", return_value=True) as mock_run_once:
+                first = trigger_internal_health_check_once()
+                second = trigger_internal_health_check_once()
 
-        with patch("browser_worker.run_once", return_value=True) as mock_run_once:
-            first = trigger_internal_health_check_once()
-            second = trigger_internal_health_check_once()
-
-        self.assertTrue(first)
-        self.assertFalse(second)
-        self.assertEqual(mock_run_once.call_count, 1)
+            self.assertTrue(first)
+            self.assertFalse(second)
+            self.assertEqual(mock_run_once.call_count, 1)
 
     def test_future_mode_runs_only_one_job_reservation_per_process(self):
         browser_worker._INTERNAL_HEALTH_CHECK_RAN = False
-        os.environ["BROWSER_AUTOMATION_ENABLED"] = "true"
-        os.environ["BROWSER_HEALTH_CHECK_ONLY"] = "false"
-        os.environ["BROWSER_RUN_INSIDE_WEB"] = "true"
-        init_db()
-        self._reset_db()
-        group_id, ad_id = self._create_valid_group_and_ad()
-        with get_connection() as connection:
-            variant_id = connection.execute("INSERT INTO ad_variants(ad_id, text, active) VALUES (?, ?, ?)", (ad_id, "Texto variante", 1)).lastrowid
-        publication_id = create_publication_record(group_id, ad_id, int(variant_id), status="queued")
+        with patch.dict(
+            os.environ,
+            {
+                "BROWSER_AUTOMATION_ENABLED": "true",
+                "BROWSER_HEALTH_CHECK_ONLY": "false",
+                "FACEBOOK_SESSION_CHECK_ONLY": "false",
+                "BROWSER_RUN_INSIDE_WEB": "true",
+            },
+            clear=False,
+        ):
+            init_db()
+            self._reset_db()
+            group_id, ad_id = self._create_valid_group_and_ad()
+            with get_connection() as connection:
+                variant_id = connection.execute("INSERT INTO ad_variants(ad_id, text, active) VALUES (?, ?, ?)", (ad_id, "Texto variante", 1)).lastrowid
+            publication_id = create_publication_record(group_id, ad_id, int(variant_id), status="queued")
 
-        with patch("browser_worker.run_once", wraps=browser_worker.run_once) as mock_run_once:
-            first = trigger_internal_health_check_once()
-            second = trigger_internal_health_check_once()
+            with patch("browser_worker.run_once", wraps=browser_worker.run_once) as mock_run_once:
+                first = trigger_internal_health_check_once()
+                second = trigger_internal_health_check_once()
 
-        self.assertTrue(first)
-        self.assertFalse(second)
-        self.assertEqual(mock_run_once.call_count, 1)
+            self.assertTrue(first)
+            self.assertFalse(second)
+            self.assertEqual(mock_run_once.call_count, 1)
 
-        with get_connection() as connection:
-            row = connection.execute("SELECT status, attempt_count, worker_id FROM publications WHERE id = ?", (publication_id,)).fetchone()
-        self.assertIn(row["status"], {"processing", "queued"})
-        self.assertNotEqual(row["status"], "published")
-        self.assertLessEqual(row["attempt_count"], 1)
-        self.assertIn(row["worker_id"], {None, browser_worker._worker_id()})
+            with get_connection() as connection:
+                row = connection.execute("SELECT status, attempt_count, worker_id FROM publications WHERE id = ?", (publication_id,)).fetchone()
+            self.assertIn(row["status"], {"processing", "queued"})
+            self.assertNotEqual(row["status"], "published")
+            self.assertLessEqual(row["attempt_count"], 1)
+            self.assertIn(row["worker_id"], {None, browser_worker._worker_id()})
 
     def test_prepare_reserved_job_valid_job_is_ready(self):
         self._reset_db()
@@ -418,6 +494,44 @@ class BrowserWorkerTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["status"], "requires_human_action")
         self.assertIn("not configured", result["details"].lower())
+
+    def test_run_once_session_check_only_short_circuits_queue(self):
+        os.environ["BROWSER_AUTOMATION_ENABLED"] = "true"
+        os.environ["FACEBOOK_SESSION_CHECK_ONLY"] = "true"
+        os.environ["BROWSER_HEALTH_CHECK_ONLY"] = "false"
+        os.environ["FACEBOOK_STORAGE_STATE"] = "secret-session-value-do-not-log"
+
+        with patch("browser_worker.reserve_single_job_for_worker") as mock_reserve, \
+             patch("browser_worker.prepare_reserved_job") as mock_prepare, \
+             patch("browser_worker.check_facebook_session", return_value={"ok": True, "status": "authenticated", "details": "ok"}) as mock_session, \
+             patch("browser_worker.logger") as mock_logger:
+            result = browser_worker.run_once()
+
+        self.assertTrue(result)
+        mock_reserve.assert_not_called()
+        mock_prepare.assert_not_called()
+        mock_session.assert_called_once_with()
+        self.assertNotIn("secret-session-value-do-not-log", str(mock_logger.info.call_args_list + mock_logger.warning.call_args_list).lower())
+
+    def test_run_once_session_check_only_handles_all_statuses_without_leaking_secret(self):
+        os.environ["BROWSER_AUTOMATION_ENABLED"] = "true"
+        os.environ["FACEBOOK_SESSION_CHECK_ONLY"] = "true"
+        os.environ["FACEBOOK_STORAGE_STATE"] = "secret-session-value-do-not-log"
+
+        for status in ["authenticated", "unauthenticated", "requires_human_action", "error"]:
+            with self.subTest(status=status):
+                with patch("browser_worker.reserve_single_job_for_worker") as mock_reserve, \
+                     patch("browser_worker.prepare_reserved_job") as mock_prepare, \
+                     patch("browser_worker.check_facebook_session", return_value={"ok": status == "authenticated", "status": status, "details": status}) as mock_session, \
+                     patch("browser_worker.logger") as mock_logger:
+                    result = browser_worker.run_once()
+
+                self.assertTrue(result)
+                mock_reserve.assert_not_called()
+                mock_prepare.assert_not_called()
+                mock_session.assert_called_once_with()
+                log_text = str(mock_logger.info.call_args_list + mock_logger.warning.call_args_list).lower()
+                self.assertNotIn("secret-session-value-do-not-log", log_text)
 
     def test_check_facebook_session_accepts_raw_json_storage_state(self):
         fake_page = MagicMock()
